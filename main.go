@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
-	"net/url"
+	// "net/http" // Uncomment for production
+	// "net/url"  // Uncomment for production
+
 	"github.com/joho/godotenv"
 )
 
@@ -26,32 +27,55 @@ func main() {
 		log.Fatal("Error loading .env file")
 	}
 
-	apiKey := os.Getenv("SCRAPINGDOG_API_KEY")
-	if apiKey == "" {
-		log.Fatal("No API Key set in .env")
-	}
+	// ========== PRODUCTION CONFIG (uncomment to use API) ==========
+	/*
+		apiKey := os.Getenv("SCRAPINGDOG_API_KEY")
+		if apiKey == "" {
+			log.Fatal("No API Key set in .env")
+		}
 
-	field := url.QueryEscape("Software Engineer")
-	if field == "" {
-		log.Fatal("No Field set in URL")
-	}
+		// === Customize API Query Parameters Below ===
+		field := url.QueryEscape("Software Engineer") // Job title
+		location := url.QueryEscape("Kansas City")    // Optional: leave empty for all locations
+		geoid := "106142749"                          // LinkedIn GeoID (Kansas City Metro)
+		page := "1"                                   // Pagination
+		sortBy := "day"                               // "relevance" or "day"
+		jobType := ""                                 // e.g., "F" for Full-time
+		expLevel := ""                                // e.g., "1" for Entry Level
+		workType := ""                                // e.g., "1" for On-site, "2" for Remote
+		filterByCompany := ""                         // Company name or ID (optional)
 
-	url := fmt.Sprintf(
-		"https://api.scrapingdog.com/linkedinjobs?api_key=%v&field=%v&geoid=106142749&location=&page=1&sort_by=day&job_type=&exp_level=&work_type=&filter_by_company=",
-		apiKey,
-		field,
-	)
+		url := fmt.Sprintf(
+			"https://api.scrapingdog.com/linkedinjobs?api_key=%s&field=%s&geoid=%s&location=%s&page=%s&sort_by=%s&job_type=%s&exp_level=%s&work_type=%s&filter_by_company=%s",
+			apiKey, field, geoid, location, page, sortBy, jobType, expLevel, workType, filterByCompany,
+		)
 
-	res, err := http.Get(url)
+		res, err := http.Get(url)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer res.Body.Close()
+
+		var JobListings []JobListing
+		decoder := json.NewDecoder(res.Body)
+		err = decoder.Decode(&JobListings)
+		if err != nil {
+			log.Fatal(err)
+		}
+	*/
+
+	// ========== TEMPORARY LOCAL TESTING ==========
+	file, err := os.Open("myJSON.json")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to open local JSON file: %v", err)
 	}
-	defer res.Body.Close()
+	defer file.Close()
+
 	var JobListings []JobListing
-	decoder := json.NewDecoder(res.Body)
+	decoder := json.NewDecoder(file)
 	err = decoder.Decode(&JobListings)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to decode local JSON: %v", err)
 	}
 
 	// Pretty print the response
