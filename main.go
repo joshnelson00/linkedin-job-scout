@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 	"github.com/joho/godotenv"
+	
 )
 
 type JobListing struct {
@@ -65,7 +66,7 @@ func main() {
 
 	testMode := false
 	var jobListings []JobListing
-	
+
 	if testMode {
 		log.Println("Running in test mode")
 		jobListings, err = getJobListingsTest()
@@ -262,7 +263,7 @@ func processJobListings(jobListings []JobListing) []string {
 	var wg sync.WaitGroup
 
 	for _, job := range jobListings {
-		wg.Add(1)
+		wg.Add(1)xw
 		go func(job JobListing) {
 			defer wg.Done()
 			desc, err := getJobDescription(job)
