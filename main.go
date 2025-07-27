@@ -12,8 +12,16 @@ import (
 	"sync"
 	"time"
 	"github.com/joho/godotenv"
-	
+
 )
+
+const (
+	maxConcurrentRequests = 2         // Controls concurrency
+	rateLimitDelay        = 2 * time.Second // Delay between requests
+	maxRetries            = 5
+)
+
+var osOpen = os.Open // default to actual os.Open
 
 type JobListing struct {
 	JobPosition    string `json:"job_position"`
@@ -87,19 +95,11 @@ func main() {
 	jobDescriptions := processJobListings(jobListings)
 	log.Printf("Received %d job descriptions\n", len(jobDescriptions))
 
-	// Print to .txt file
-	output := ""
-	for _, jobDesc := range jobDescriptions {
-		output += jobDesc + "\n\n"
+	for _, desc := range jobDescriptions {
+		eval := getJobEvaluation(desc)
+		fmt.Println(eval)
 	}
-
-	fileName := "job_descriptions_output.txt"
-	err = os.WriteFile(fileName, []byte(output), 0644)
-	if err != nil {
-		log.Fatalf("Failed to write output to file: %v", err)
-	}
-
-	log.Printf("Job descriptions written to %s\n", fileName)
+	return
 }
 
 func getJobListingsTest() ([]JobListing, error) {
@@ -180,6 +180,24 @@ func getJobListings() ([]JobListing, error) {
 
 	return allJobListings, nil
 }
+func getJobDescriptionWithRetry(job JobListing) (JobDescription, error) {
+	var desc JobDescription
+	var err error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		desc, err = getJobDescription(job)
+		if err == nil {
+			return desc, nil
+		}
+
+		wait := time.Duration(attempt*2) * time.Second
+		log.Printf("Retrying job %s (attempt %d/%d) after error: %v\n", job.JobID, attempt, maxRetries, err)
+		time.Sleep(wait)
+	}
+
+	return desc, fmt.Errorf("failed after %d retries: %v", maxRetries, err)
+}
+
 
 func getJobDescription(job JobListing) (JobDescription, error) {
 	log.Printf("Fetching description for JobID: %s (%s)\n", job.JobID, job.JobPosition)
@@ -258,22 +276,32 @@ type jobResult struct {
 }
 
 func processJobListings(jobListings []JobListing) []string {
-	log.Println("Launching goroutines for job descriptions")
+	log.Println("Launching throttled goroutines for job descriptions")
+
 	resultChan := make(chan jobResult)
 	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, maxConcurrentRequests)
+	ticker := time.NewTicker(rateLimitDelay)
 
 	for _, job := range jobListings {
-		wg.Add(1)xw
+		wg.Add(1)
 		go func(job JobListing) {
 			defer wg.Done()
-			desc, err := getJobDescription(job)
+
+			semaphore <- struct{}{} // acquire slot
+			<-ticker.C              // wait for rate limit delay
+
+			desc, err := getJobDescriptionWithRetry(job)
 			resultChan <- jobResult{desc: desc, err: err}
+
+			<-semaphore // release slot
 		}(job)
 	}
 
 	go func() {
 		wg.Wait()
 		close(resultChan)
+		ticker.Stop()
 	}()
 
 	return collectFormattedResults(resultChan)
