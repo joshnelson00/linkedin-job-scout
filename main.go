@@ -6,9 +6,11 @@ import (
 	"log"
 	"os"
 	"errors"
-	// "net/http" // Uncomment for production
-	// "net/url"  // Uncomment for production
-
+	"io"
+	"net/http"
+	"net/url"
+	"sync"
+	"time"
 	"github.com/joho/godotenv"
 )
 
@@ -36,7 +38,7 @@ type JobDescription struct {
 	JobApplyLink        string             `json:"job_apply_link"`
 	RecruiterDetails    []Recruiter        `json:"recruiter_details"`
 	SimilarJobs         []SimilarJob       `json:"similar_jobs"`
-	PeopleAlsoViewed    []SimilarJob       `json:"people_also_viewed"` // Same structure as SimilarJobs
+	PeopleAlsoViewed    []SimilarJob       `json:"people_also_viewed"`
 }
 
 type Recruiter struct {
@@ -53,91 +55,76 @@ type SimilarJob struct {
 }
 
 func main() {
+	log.Println("Starting main function...")
+
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
+	log.Println(".env file loaded successfully")
 
-	// ========== PRODUCTION CONFIG (uncomment to use API) ==========
-	/*
-		err = getJobListings()
+	testMode := false
+	var jobListings []JobListing
+	
+	if testMode {
+		log.Println("Running in test mode")
+		jobListings, err = getJobListingsTest()
+		if err != nil {
+			log.Fatalf("Error in getJobListingsTest: %v", err)
+		}
+		log.Printf("Loaded %d job listings from test JSON\n", len(jobListings))
+	} else {
+		log.Println("Running in production mode")
+		jobListings, err = getJobListings()
 		if err != nil {
 			log.Fatalf("Error in getJobListings: %v", err)
 		}
-	*/
-	jobListings, err := getJobListingsTest()
+		log.Printf("Loaded %d job listings from API\n", len(jobListings))
+	}
+
+	log.Println("Processing job listings...")
+	jobDescriptions := processJobListings(jobListings)
+	log.Printf("Received %d job descriptions\n", len(jobDescriptions))
+
+	// Print to .txt file
+	output := ""
+	for _, jobDesc := range jobDescriptions {
+		output += jobDesc + "\n\n"
+	}
+
+	fileName := "job_descriptions_output.txt"
+	err = os.WriteFile(fileName, []byte(output), 0644)
 	if err != nil {
-		log.Fatalf("Error in getJobListingsTest: %v", err)
+		log.Fatalf("Failed to write output to file: %v", err)
 	}
 
-	// Create channel to collect JobDescriptions
-	descChan := make(chan JobDescription)
-	errChan := make(chan error)
-	var wg sync.WaitGroup
-
-	for _, job := range jobListings {
-		wg.Add(1)
-		go func(job JobListing) {
-			defer wg.Done()
-			desc, err := getJobDescription(job)
-			if err != nil {
-				errChan <- err
-				return
-			}
-			descChan <- desc
-		}(job)
-	}
-
-	// Close channels when done
-	go func() {
-		wg.Wait()
-		close(descChan)
-		close(errChan)
-	}()
-
-	// Collect results
-	for {
-		select {
-		case desc, ok := <-descChan:
-			if !ok {
-				descChan = nil
-			} else {
-				// Handle description (print/store)
-				fmt.Printf("Job: %s at %s\n", desc.JobPosition, desc.CompanyName)
-			}
-		case err, ok := <-errChan:
-			if !ok {
-				errChan = nil
-			} else {
-				log.Printf("Error: %v", err)
-			}
-		}
-		if descChan == nil && errChan == nil {
-			break
-		}
-	}
+	log.Printf("Job descriptions written to %s\n", fileName)
 }
 
-
-func getJobListingsTest() error {
+func getJobListingsTest() ([]JobListing, error) {
+	log.Println("Opening test JSON file: myJSON.json")
 	var jobListings []JobListing
 
 	file, err := os.Open("myJSON.json")
 	if err != nil {
+		log.Printf("Failed to open test file: %v\n", err)
 		return jobListings, err
 	}
 	defer file.Close()
 
+	log.Println("Decoding test JSON data")
 	decoder := json.NewDecoder(file)
 	err = decoder.Decode(&jobListings)
 	if err != nil {
-		return joblistings, err
+		log.Printf("Failed to decode test JSON: %v\n", err)
+		return jobListings, err
 	}
 
 	return jobListings, nil
 }
 
 func getJobListings() ([]JobListing, error) {
+	log.Println("Fetching job listings from API...")
 	var allJobListings []JobListing
 
 	apiKey := os.Getenv("SCRAPINGDOG_API_KEY")
@@ -145,7 +132,6 @@ func getJobListings() ([]JobListing, error) {
 		return nil, errors.New("No API Key set in .env")
 	}
 
-	// === Static query params ===
 	field := url.QueryEscape("Software Engineer")
 	location := url.QueryEscape("Kansas City")
 	geoid := "106142749"
@@ -159,16 +145,16 @@ func getJobListings() ([]JobListing, error) {
 	page := 1
 
 	for {
-		// Build URL for the current page
+		log.Printf("Requesting page %d from API\n", page)
 		url := fmt.Sprintf(
 			"https://api.scrapingdog.com/linkedinjobs?api_key=%s&field=%s&geoid=%s&location=%s&page=%d&sort_by=%s&job_type=%s&exp_level=%s&work_type=%s&filter_by_company=%s",
 			apiKey, field, geoid, location, page, sortBy, jobType, expLevel, workType, filterByCompany,
 		)
 
-		// Fetch this page
 		res, err := http.Get(url)
 		if err != nil {
-			return nil, fmt.Errorf("error fetching page %d: %w", page, err)
+			log.Printf("Error fetching page %d: %v\n", page, err)
+			return nil, err
 		}
 		defer res.Body.Close()
 
@@ -176,26 +162,103 @@ func getJobListings() ([]JobListing, error) {
 		decoder := json.NewDecoder(res.Body)
 		err = decoder.Decode(&pageListings)
 		if err != nil {
-			return nil, fmt.Errorf("error decoding page %d: %w", page, err)
+			log.Printf("Error decoding page %d: %v\n", page, err)
+			return nil, err
 		}
 
-		// Append to allJobListings Slice
+		log.Printf("Fetched %d listings from page %d\n", len(pageListings), page)
 		allJobListings = append(allJobListings, pageListings...)
 
-		// Stop when fewer than 10 listings returned
 		if len(pageListings) < pageSize {
+			log.Println("Less than 10 listings returned — ending pagination")
 			break
 		}
 
-		page++ // next page
+		page++
 	}
 
 	return allJobListings, nil
 }
 
-func processJobListings(jobListings []JobListing) {
-	descChan := make(chan JobDescription)
-	errChan := make(chan error)
+func getJobDescription(job JobListing) (JobDescription, error) {
+	log.Printf("Fetching description for JobID: %s (%s)\n", job.JobID, job.JobPosition)
+	var desc JobDescription
+
+	apiKey := os.Getenv("SCRAPINGDOG_API_KEY")
+	if apiKey == "" {
+		return desc, errors.New("No API Key set in .env")
+	}
+
+	if job.JobID == "" {
+		log.Println("JobID is empty!")
+		return desc, errors.New("Job link is empty")
+	}
+
+	apiURL := fmt.Sprintf("https://api.scrapingdog.com/linkedinjobs?api_key=%v&job_id=%v", apiKey, url.QueryEscape(job.JobID))
+
+	const maxRetries = 5
+	var resp *http.Response
+	var err error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		resp, err = http.Get(apiURL)
+		if err != nil {
+			log.Printf("HTTP request failed for JobID %s: %v\n", job.JobID, err)
+			return desc, err
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests { // 429
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			wait := time.Duration(attempt*2) * time.Second
+			log.Printf("Rate limit hit for JobID %s: %s - %s. Retrying in %v...", job.JobID, resp.Status, string(bodyBytes), wait)
+			time.Sleep(wait)
+			continue
+		} else if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			log.Printf("ScrapingDog error for JobID %s: %s - %s\n", job.JobID, resp.Status, string(bodyBytes))
+			return desc, fmt.Errorf("ScrapingDog error: %s - %s", resp.Status, string(bodyBytes))
+		}
+
+		// Successful response, break retry loop
+		break
+	}
+
+	if resp == nil {
+		return desc, errors.New("Failed to get response from API after retries")
+	}
+	defer resp.Body.Close()
+
+	log.Printf("Decoding job description for JobID: %s\n", job.JobID)
+	decoder := json.NewDecoder(resp.Body)
+
+	var descs []JobDescription
+	err = decoder.Decode(&descs)
+	if err != nil {
+		log.Printf("Failed to decode job description array for JobID %s: %v\n", job.JobID, err)
+		return desc, err
+	}
+
+	if len(descs) == 0 {
+		err = errors.New("empty job description array")
+		log.Printf("No job descriptions found for JobID %s\n", job.JobID)
+		return desc, err
+	}
+
+	desc = descs[0]
+	return desc, nil
+}
+
+
+type jobResult struct {
+	desc JobDescription
+	err  error
+}
+
+func processJobListings(jobListings []JobListing) []string {
+	log.Println("Launching goroutines for job descriptions")
+	resultChan := make(chan jobResult)
 	var wg sync.WaitGroup
 
 	for _, job := range jobListings {
@@ -203,42 +266,57 @@ func processJobListings(jobListings []JobListing) {
 		go func(job JobListing) {
 			defer wg.Done()
 			desc, err := getJobDescription(job)
-			if err != nil {
-				errChan <- err
-				return
-			}
-			descChan <- desc
+			resultChan <- jobResult{desc: desc, err: err}
 		}(job)
 	}
 
-	// Close channels after all jobs are processed
 	go func() {
 		wg.Wait()
-		close(descChan)
-		close(errChan)
+		close(resultChan)
 	}()
 
-	// Collect results
-	collectResults(descChan, errChan)
+	return collectFormattedResults(resultChan)
 }
 
-func collectResults(descChan <-chan JobDescription, errChan <-chan error) {
-	for descChan != nil || errChan != nil {
-		select {
-		case desc, ok := <-descChan:
-			if !ok {
-				descChan = nil
-				continue
-			}
-			fmt.Printf("Job: %s at %s\n", desc.JobPosition, desc.CompanyName)
+func collectFormattedResults(resultChan <-chan jobResult) []string {
+	var results []string
 
-		case err, ok := <-errChan:
-			if !ok {
-				errChan = nil
-				continue
-			}
-			log.Printf("Error: %v", err)
+	log.Println("Collecting job descriptions from channel...")
+	for res := range resultChan {
+		if res.err != nil {
+			log.Printf("Error occurred during description fetch: %v\n", res.err)
+			continue
 		}
-	}
-}
 
+		desc := res.desc
+		log.Printf("Formatting job: %s at %s\n", desc.JobPosition, desc.CompanyName)
+		formatted := fmt.Sprintf(
+			`Title: %s
+Company: %s
+Location: %s
+Posted: %s
+Seniority Level: %s
+Employment Type: %s
+Job Function: %s
+Industry: %s
+Apply Link: %s
+Description: %s
+---`,
+			desc.JobPosition,
+			desc.CompanyName,
+			desc.JobLocation,
+			desc.JobPostingTime,
+			desc.SeniorityLevel,
+			desc.EmploymentType,
+			desc.JobFunction,
+			desc.Industries,
+			desc.JobApplyLink,
+			desc.JobDescription,
+		)
+
+		results = append(results, formatted)
+	}
+
+	log.Println("Finished formatting job descriptions")
+	return results
+}
