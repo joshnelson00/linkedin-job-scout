@@ -11,7 +11,9 @@ import (
 	"net/url"
 	"sync"
 	"time"
+	"context"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 
 )
 
@@ -66,11 +68,21 @@ type SimilarJob struct {
 func main() {
 	log.Println("Starting main function...")
 
+
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
 	log.Println(".env file loaded successfully")
+
+	ctx := context.Background()
+	redisAddr := os.Getenv("REDIS_ADDR")
+	redisDB := redis.NewClient(&redis.Options{
+        Addr:	  redisAddr,
+        Password: "", // No password set
+        DB:		  0,  // Use default DB
+        Protocol: 2,  // Connection protocol
+    })
 
 	testMode := false
 	var jobListings []JobListing
@@ -92,9 +104,8 @@ func main() {
 	}
 
 	log.Println("Processing job listings...")
-	jobDescriptions := processJobListings(jobListings)
+	jobDescriptions := processJobListings(ctx, redisDB, jobListings)
 	log.Printf("Received %d job descriptions\n", len(jobDescriptions))
-
 	for _, desc := range jobDescriptions {
 		eval := getJobEvaluation(desc)
 		fmt.Println(eval)
@@ -133,10 +144,10 @@ func getJobListings() ([]JobListing, error) {
 		return nil, errors.New("No API Key set in .env")
 	}
 
-	field := url.QueryEscape("Software Engineer")
-	location := url.QueryEscape("Kansas City")
-	geoid := "106142749"
-	sortBy := "day"
+	field := url.QueryEscape("Software Engineer") // Positionm
+	location := url.QueryEscape("Kansas City") // Location Name
+	geoid := "106142749" // Location ID
+	sortBy := "day" // Last 24 Hours
 	jobType := ""
 	expLevel := ""
 	workType := ""
@@ -180,12 +191,12 @@ func getJobListings() ([]JobListing, error) {
 
 	return allJobListings, nil
 }
-func getJobDescriptionWithRetry(job JobListing) (JobDescription, error) {
+func getJobDescriptionWithRetry(ctx context.Context, redisDB *redis.Client, job JobListing) (JobDescription, error) {
 	var desc JobDescription
 	var err error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		desc, err = getJobDescription(job)
+		desc, err = getJobDescription(ctx, redisDB, job)
 		if err == nil {
 			return desc, nil
 		}
@@ -199,9 +210,17 @@ func getJobDescriptionWithRetry(job JobListing) (JobDescription, error) {
 }
 
 
-func getJobDescription(job JobListing) (JobDescription, error) {
+func getJobDescription(ctx context.Context, redisDB *redis.Client, job JobListing) (JobDescription, error) {
 	log.Printf("Fetching description for JobID: %s (%s)\n", job.JobID, job.JobPosition)
 	var desc JobDescription
+
+	cacheKey := fmt.Sprintf("jobID:%s", job.JobID)
+	desc, err := getFromCache(ctx, redisDB, cacheKey)
+	if err == nil {
+		log.Printf("Cache hit for JobID: %s\n", job.JobID)
+		return desc, nil
+	}
+	log.Printf("Cache miss for JobID: %s\n", job.JobID)
 
 	apiKey := os.Getenv("SCRAPINGDOG_API_KEY")
 	if apiKey == "" {
@@ -215,9 +234,7 @@ func getJobDescription(job JobListing) (JobDescription, error) {
 
 	apiURL := fmt.Sprintf("https://api.scrapingdog.com/linkedinjobs?api_key=%v&job_id=%v", apiKey, url.QueryEscape(job.JobID))
 
-	const maxRetries = 5
 	var resp *http.Response
-	var err error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		resp, err = http.Get(apiURL)
@@ -251,22 +268,48 @@ func getJobDescription(job JobListing) (JobDescription, error) {
 
 	log.Printf("Decoding job description for JobID: %s\n", job.JobID)
 	decoder := json.NewDecoder(resp.Body)
-
 	var descs []JobDescription
 	err = decoder.Decode(&descs)
 	if err != nil {
 		log.Printf("Failed to decode job description array for JobID %s: %v\n", job.JobID, err)
 		return desc, err
 	}
-
-	if len(descs) == 0 {
-		err = errors.New("empty job description array")
-		log.Printf("No job descriptions found for JobID %s\n", job.JobID)
-		return desc, err
+	desc = descs[0]
+	err = storeInCache(ctx, redisDB, cacheKey, desc, 24*time.Hour)
+	if err != nil {
+		log.Printf("Failed to cache JobID %s: %v\n", job.JobID, err)
 	}
 
-	desc = descs[0]
 	return desc, nil
+}
+
+func getFromCache(ctx context.Context, redisDB *redis.Client, key string) (JobDescription, error) {
+	var desc JobDescription
+	cached, err := redisDB.Get(ctx, key).Result()
+	if err == redis.Nil {
+		return desc, errors.New("cache miss")
+	} else if err != nil {
+		return desc, fmt.Errorf("cache error: %w", err)
+	}
+
+	err = json.Unmarshal([]byte(cached), &desc)
+	if err != nil {
+		return desc, fmt.Errorf("failed to decode cached data: %w", err)
+	}
+	return desc, nil
+}
+
+func storeInCache(ctx context.Context, redisDB *redis.Client, key string, desc JobDescription, ttl time.Duration) error {
+	data, err := json.Marshal(desc)
+	if err != nil {
+		return fmt.Errorf("failed to encode data for cache: %w", err)
+	}
+
+	err = redisDB.Set(ctx, key, data, ttl).Err()
+	if err != nil {
+		return fmt.Errorf("failed to store in cache: %w", err)
+	}
+	return nil
 }
 
 
@@ -275,13 +318,12 @@ type jobResult struct {
 	err  error
 }
 
-func processJobListings(jobListings []JobListing) []string {
+func processJobListings(ctx context.Context, redisDB *redis.Client, jobListings []JobListing) []string {
 	log.Println("Launching throttled goroutines for job descriptions")
 
 	resultChan := make(chan jobResult)
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, maxConcurrentRequests)
-	ticker := time.NewTicker(rateLimitDelay)
 
 	for _, job := range jobListings {
 		wg.Add(1)
@@ -289,9 +331,10 @@ func processJobListings(jobListings []JobListing) []string {
 			defer wg.Done()
 
 			semaphore <- struct{}{} // acquire slot
-			<-ticker.C              // wait for rate limit delay
+			time.Sleep(rateLimitDelay) // wait for rate limit delay
 
-			desc, err := getJobDescriptionWithRetry(job)
+			desc, err := getJobDescriptionWithRetry(ctx, redisDB, job)
+
 			resultChan <- jobResult{desc: desc, err: err}
 
 			<-semaphore // release slot
@@ -301,11 +344,11 @@ func processJobListings(jobListings []JobListing) []string {
 	go func() {
 		wg.Wait()
 		close(resultChan)
-		ticker.Stop()
 	}()
 
 	return collectFormattedResults(resultChan)
 }
+
 
 func collectFormattedResults(resultChan <-chan jobResult) []string {
 	var results []string

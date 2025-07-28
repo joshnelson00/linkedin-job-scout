@@ -61,6 +61,10 @@ func getJobEvaluation(jobDesc string) string {
 	Your task is to evaluate my fit for the job and return a response in the following EXACT format:
 
 	---
+	Job Title: <title>
+
+	Job Application Link: <url>
+
 	Fit Score: <score>/10
 
 	Explanation:
@@ -97,7 +101,7 @@ func getJobEvaluation(jobDesc string) string {
 
 	modelName := os.Getenv("OLLAMA_MODEL")
 	if modelName == "" {
-		modelName = "llama3" // 🧠 Use a lighter model instead of "deepseek-r1"
+		modelName = "llama3.2" // 🧠 Use a lighter model instead of "deepseek-r1"
 	}
 
 	req := Request{
@@ -120,6 +124,15 @@ func getJobEvaluation(jobDesc string) string {
 
 	cleanedResponse := cleanResponse(resp)
 	fmt.Printf("🧹 Cleaned response length: %d characters\n", len(cleanedResponse))
+
+	// 📝 Save evaluation to file
+	outputFile := "evaluations.txt"
+	err = appendToFile(outputFile, cleanedResponse)
+	if err != nil {
+		fmt.Printf("❌ Failed to write to %s: %v\n", outputFile, err)
+	} else {
+		fmt.Printf("💾 Saved evaluation to %s\n", outputFile)
+	}
 
 	return cleanedResponse
 }
@@ -179,4 +192,20 @@ func cleanResponse(resp *Response) string {
 	fmt.Println(clean)
 
 	return clean
+}
+
+func appendToFile(filename string, content string) error {
+	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// Add a clear separator between entries
+	entry := fmt.Sprintf("\n=============================\n%s\n", content)
+
+	if _, err := f.WriteString(entry); err != nil {
+		return err
+	}
+	return nil
 }
