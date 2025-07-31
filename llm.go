@@ -5,16 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Request struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Stream      bool      `json:"stream"`
+	Temperature float64   `json:"temperature,omitempty"` // <-- Add this
 }
 
 type Message struct {
@@ -37,108 +43,185 @@ type Response struct {
 
 const defaultOllamaURL = "http://localhost:11434/api/chat"
 
-func getJobEvaluation(jobDesc string) string {
-	fmt.Println("🔍 Starting getJobEvaluation")
+const systemInstruction = `You are an expert career advisor and resume evaluator. You return strict but accurate feedback with practical suggestions.`
+
+type Evaluation struct {
+	Score int
+	Text  string
+}
+
+func getJobEvaluations(jobDescs []string) error {
+	fmt.Println("🔍 Starting getJobEvaluations")
 
 	resumeBytes, err := os.ReadFile("resume.txt")
 	if err != nil {
-		fmt.Printf("❌ Error reading resume.txt: %v\n", err)
-		return ""
+		return err
 	}
-	fmt.Println("✅ Successfully read resume.txt")
-
 	resumeContent := string(resumeBytes)
-	fmt.Printf("📝 Resume content length: %d characters\n", len(resumeContent))
-	fmt.Printf("📄 Job description length: %d characters\n", len(jobDesc))
 
-	prompt := fmt.Sprintf(`
-	You are an expert career advisor and resume evaluator.
-
-	I will provide:
-	1. My resume.
-	2. A job listing.
-
-	Your task is to evaluate my fit for the job and return a response in the following EXACT format:
-
-	---
-	Job Title: <title>
-
-	Job Application Link: <url>
-
-	Fit Score: <score>/10
-
-	Explanation:
-	<why this score was given>
-
-	Suggested Resume Changes:
-	- <change 1>
-	- <change 2>
-	- <etc.>
-
-	Missing Qualifications:
-	- <missing qualification 1>
-	- <missing qualification 2>
-	- <etc.>
-
-	Optional Cover Letter Opening:
-	"<suggested opening>"
-	---
-
-	Here is my resume:
-	===
-	%v
-	===
-
-	Here is the job listing:
-	===
-	%v
-	===`, resumeContent, jobDesc)
-
-	msg := Message{
-		Role:    "user",
-		Content: prompt,
+	outputFile := "LinkedinEvaluations.txt"
+	fmt.Printf("🗑️  Resetting output file: %s\n", outputFile)
+	err = os.WriteFile(outputFile, []byte{}, 0644)
+	if err != nil {
+		return err
 	}
 
 	modelName := os.Getenv("OLLAMA_MODEL")
 	if modelName == "" {
-		modelName = "llama3.2" // 🧠 Use a lighter model instead of "deepseek-r1"
+		modelName = "gemma3:1b" // Model preference here
 	}
-
-	req := Request{
-		Model:    modelName,
-		Stream:   false,
-		Messages: []Message{msg},
+	temperature := 0.3 // default value
+	if tStr := os.Getenv("OLLAMA_TEMP"); tStr != "" {
+		if tVal, err := strconv.ParseFloat(tStr, 64); err == nil {
+			temperature = tVal
+		}
 	}
+	fmt.Printf("🌡️ Using temperature: %.2f\n", temperature)
+	
+	fmt.Printf("🤖 Using model: %s\n", modelName)
 
-	fmt.Println("📡 Sending request to Ollama API...")
-	resp, err := talkToOllama(defaultOllamaURL, req)
-	if err != nil {
-		fmt.Printf("❌ Error talking to Ollama: %v\n", err)
-		return ""
-	}
-	fmt.Println("✅ Received response from Ollama")
+	const maxConcurrent = 1 // Max concurrent channels (More Threads = Better Concurrency)
+	sem := make(chan struct{}, maxConcurrent)
 
-	// 💤 Throttle here to reduce CPU load (e.g., between jobs)
-	fmt.Println("⏳ Sleeping for 3 seconds to reduce load...")
-	time.Sleep(3 * time.Second)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var evaluations []Evaluation
 
-	cleanedResponse := cleanResponse(resp)
-	fmt.Printf("🧹 Cleaned response length: %d characters\n", len(cleanedResponse))
+	for i, jobDesc := range jobDescs {
+		wg.Add(1)
+		sem <- struct{}{}
 
-	// 📝 Save evaluation to file
-	outputFile := "evaluations.txt"
-	err = appendToFile(outputFile, cleanedResponse)
-	if err != nil {
-		fmt.Printf("❌ Failed to write to %s: %v\n", outputFile, err)
-	} else {
-		fmt.Printf("💾 Saved evaluation to %s\n", outputFile)
-	}
+		go func(i int, jobDesc string) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-	return cleanedResponse
+			fmt.Printf("🧠 Evaluating job #%d\n", i+1)
+
+			prompt := fmt.Sprintf(`
+			I will provide:
+			1. My resume.
+			2. A job listing.
+
+			Your task is to evaluate my exact fit for the job based strictly on the information provided.
+
+			Requirements:
+			- Be extremely detailed and realistic in your scoring.
+			- Do NOT inflate the score.
+			- Use the full range from 0 to 100.
+			- Deduct points for each missing qualification or mismatch.
+			- Provide actionable, specific suggestions, not generic tips.
+
+			Format your response EXACTLY as follows:
+			---
+			Job Title: <title>
+
+			Company: 
+
+			Job Application Link:
+			<url>
+
+			Fit Score: <score>/100
+
+			Explanation:
+			<why this score was given — be specific and refer to the resume and job listing directly>
+
+			Suggested Resume Changes:
+			- <specific change 1>
+			- <specific change 2>
+
+			Missing Qualifications:
+			- <missing 1>
+			- <missing 2>
+			---
+
+			Here is my resume:
+			===
+			%v
+			===
+
+			Here is the job listing:
+			===
+			%v
+			===
+			`, resumeContent, jobDesc)
+
+
+			req := Request{
+				Model:       modelName,
+				Stream:      false,
+				Temperature: temperature,
+				Messages: []Message{
+					{Role: "system", Content: systemInstruction},
+					{Role: "user", Content: prompt},
+				},
+			}
+
+			resp, err := talkToOllama(defaultOllamaURL, req)
+			if err != nil {
+				fmt.Printf("❌ Error talking to Ollama for job #%d: %v\n", i+1, err)
+				return
 }
 
+			cleaned := cleanResponse(resp)
+			if !strings.Contains(cleaned, "Fit Score:") {
+				fmt.Printf("⚠️ Invalid or malformed response for job #%d, skipping\n", i+1)
+			}
+			score := extractScore(cleaned)
+
+			formatted := fmt.Sprintf("🔽 Job Evaluation #%d\n%s\n\n", i+1, cleaned)
+
+			mu.Lock()
+			evaluations = append(evaluations, Evaluation{
+				Score: score,
+				Text:  formatted,
+			})
+			mu.Unlock()
+		}(i, jobDesc)
+	}
+
+	wg.Wait()
+
+	fmt.Println("📑 Sorting evaluations by score")
+	sorted := sortEvaluations(evaluations)
+
+	var outputBuffer strings.Builder
+	for _, eval := range sorted {
+		outputBuffer.WriteString(eval.Text)
+	}
+	err = os.WriteFile(outputFile, []byte(outputBuffer.String()), 0644)
+	if err != nil {
+		return err
+	} else {
+		fmt.Printf("✅ All evaluations sorted and saved to %s\n", outputFile)
+	}
+
+	return nil
+}
+
+func extractScore(text string) int {
+	fmt.Println("📈 Extracting score from text")
+	re := regexp.MustCompile(`(?i)Fit Score:\s*(\d+(?:\.\d+)?)/100`)
+	matches := re.FindStringSubmatch(text)
+	if len(matches) >= 2 {
+		f, err := strconv.ParseFloat(matches[1], 64)
+		if err == nil {
+			return int(math.Round(f))
+		}
+	}
+	fmt.Println("⚠️  Score not found or invalid, defaulting to 0")
+	return 0
+}
+
+func sortEvaluations(evals []Evaluation) []Evaluation {
+	fmt.Println("🔃 Sorting evaluations in descending order")
+	sort.SliceStable(evals, func(i, j int) bool {
+		return evals[i].Score > evals[j].Score
+	})
+	return evals
+}
 
 func talkToOllama(url string, ollamaReq Request) (*Response, error) {
+	fmt.Println("📤 Sending request to Ollama")
 	reqJSON, err := json.Marshal(&ollamaReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -180,32 +263,37 @@ func talkToOllama(url string, ollamaReq Request) (*Response, error) {
 }
 
 func cleanResponse(resp *Response) string {
+	fmt.Println("🧹 Cleaning response")
 	clean := resp.Message.Content
-	fmt.Println("🔎 Original response content:")
-	fmt.Println(clean)
 
+	// Remove <think> tags
 	clean = strings.ReplaceAll(clean, "<think>", "")
 	clean = strings.ReplaceAll(clean, "</think>", "")
-	clean = strings.TrimSpace(clean)
 
+	// Replace markdown links [text](url) with just url
+	linkPattern := regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
+	clean = linkPattern.ReplaceAllString(clean, "$1")
+
+	clean = strings.TrimSpace(clean)
 	fmt.Println("🔎 Cleaned response content:")
-	fmt.Println(clean)
 
 	return clean
 }
 
+
 func appendToFile(filename string, content string) error {
+	fmt.Printf("📝 Appending to file: %s\n", filename)
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	// Add a clear separator between entries
 	entry := fmt.Sprintf("\n=============================\n%s\n", content)
 
 	if _, err := f.WriteString(entry); err != nil {
 		return err
 	}
+	fmt.Println("✅ Write successful")
 	return nil
 }
