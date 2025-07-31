@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	maxConcurrentRequests = 2         // Controls concurrency
+	maxConcurrentRequests = 1      // Controls concurrency
 	rateLimitDelay        = 2 * time.Second // Delay between requests
 	maxRetries            = 5
 )
@@ -84,56 +84,29 @@ func main() {
         Protocol: 2,  // Connection protocol
     })
 
-	testMode := false
 	var jobListings []JobListing
 
-	if testMode {
-		log.Println("Running in test mode")
-		jobListings, err = getJobListingsTest()
-		if err != nil {
-			log.Fatalf("Error in getJobListingsTest: %v", err)
-		}
-		log.Printf("Loaded %d job listings from test JSON\n", len(jobListings))
-	} else {
-		log.Println("Running in production mode")
-		jobListings, err = getJobListings()
-		if err != nil {
-			log.Fatalf("Error in getJobListings: %v", err)
-		}
-		log.Printf("Loaded %d job listings from API\n", len(jobListings))
+	jobListings, err = getJobListings()
+	if err != nil {
+		log.Fatalf("Error in getJobListings: %v", err)
 	}
 
+	log.Printf("Loaded %d job listings from API\n", len(jobListings))
 	log.Println("Processing job listings...")
+
 	jobDescriptions := processJobListings(ctx, redisDB, jobListings)
 	log.Printf("Received %d job descriptions\n", len(jobDescriptions))
-	for _, desc := range jobDescriptions {
-		eval := getJobEvaluation(desc)
-		fmt.Println(eval)
+	err = getJobEvaluations(jobDescriptions)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = sendEvaluationsEmail()
+	if err != nil {
+		log.Fatal(err)
 	}
 	return
 }
 
-func getJobListingsTest() ([]JobListing, error) {
-	log.Println("Opening test JSON file: myJSON.json")
-	var jobListings []JobListing
-
-	file, err := os.Open("myJSON.json")
-	if err != nil {
-		log.Printf("Failed to open test file: %v\n", err)
-		return jobListings, err
-	}
-	defer file.Close()
-
-	log.Println("Decoding test JSON data")
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&jobListings)
-	if err != nil {
-		log.Printf("Failed to decode test JSON: %v\n", err)
-		return jobListings, err
-	}
-
-	return jobListings, nil
-}
 
 func getJobListings() ([]JobListing, error) {
 	log.Println("Fetching job listings from API...")
@@ -143,10 +116,11 @@ func getJobListings() ([]JobListing, error) {
 	if apiKey == "" {
 		return nil, errors.New("No API Key set in .env")
 	}
+	geoID := os.Getenv("GEO_ID")
 
-	field := url.QueryEscape("Software Engineer") // Positionm
-	location := url.QueryEscape("Kansas City") // Location Name
-	geoid := "106142749" // Location ID
+	field := url.QueryEscape("Software Engineer Intern") // Position Searching For
+	location := url.QueryEscape("") // Location Name (doesn't affect query, but geoid does)
+	geoid := geoID // Location ID (Set in .env)
 	sortBy := "day" // Last 24 Hours
 	jobType := ""
 	expLevel := ""
@@ -191,6 +165,7 @@ func getJobListings() ([]JobListing, error) {
 
 	return allJobListings, nil
 }
+
 func getJobDescriptionWithRetry(ctx context.Context, redisDB *redis.Client, job JobListing) (JobDescription, error) {
 	var desc JobDescription
 	var err error
