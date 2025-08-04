@@ -59,12 +59,9 @@ func getJobEvaluations(jobDescs []string) error {
 	}
 	resumeContent := string(resumeBytes)
 
-	outputFile := "LinkedinEvaluations.txt"
+	outputFile := "LinkedinEvaluations.html"
+
 	fmt.Printf("🗑️  Resetting output file: %s\n", outputFile)
-	err = os.WriteFile(outputFile, []byte{}, 0644)
-	if err != nil {
-		return err
-	}
 
 	modelName := os.Getenv("OLLAMA_MODEL")
 	if modelName == "" {
@@ -77,7 +74,7 @@ func getJobEvaluations(jobDescs []string) error {
 		}
 	}
 	fmt.Printf("🌡️ Using temperature: %.2f\n", temperature)
-	
+
 	fmt.Printf("🤖 Using model: %s\n", modelName)
 
 	const maxConcurrent = 1 // Max concurrent channels (More Threads = Better Concurrency)
@@ -145,7 +142,6 @@ func getJobEvaluations(jobDescs []string) error {
 			===
 			`, resumeContent, jobDesc)
 
-
 			req := Request{
 				Model:       modelName,
 				Stream:      false,
@@ -160,7 +156,7 @@ func getJobEvaluations(jobDescs []string) error {
 			if err != nil {
 				fmt.Printf("❌ Error talking to Ollama for job #%d: %v\n", i+1, err)
 				return
-}
+			}
 
 			cleaned := cleanResponse(resp)
 			if !strings.Contains(cleaned, "Fit Score:") {
@@ -188,12 +184,22 @@ func getJobEvaluations(jobDescs []string) error {
 	for _, eval := range sorted {
 		outputBuffer.WriteString(eval.Text)
 	}
+
+	outputFile = "LinkedinEvaluations.html"
+	fmt.Printf("🗑️  Resetting output file: %s\n", outputFile)
 	err = os.WriteFile(outputFile, []byte(outputBuffer.String()), 0644)
 	if err != nil {
 		return err
-	} else {
-		fmt.Printf("✅ All evaluations sorted and saved to %s\n", outputFile)
 	}
+	fmt.Printf("✅ Text evaluations saved to %s\n", outputFile)
+
+	// Also write HTML file
+	htmlFile := "LinkedinEvaluations.html"
+	err = writeHTMLFile(htmlFile, sorted)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("🌐 HTML evaluations saved to %s\n", htmlFile)
 
 	return nil
 }
@@ -280,6 +286,42 @@ func cleanResponse(resp *Response) string {
 	return clean
 }
 
+func writeHTMLFile(filename string, evaluations []Evaluation) error {
+	fmt.Println("🖨️ Generating HTML output")
+
+	var sb strings.Builder
+	sb.WriteString("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Job Evaluations</title>")
+	sb.WriteString("<style>body{font-family:sans-serif;padding:20px;} .eval{margin-bottom:40px;padding:20px;border:1px solid #ccc;border-radius:10px;} h2{margin-top:0;} a{color:#0645AD;}</style>")
+	sb.WriteString("</head><body><h1>Job Fit Evaluations</h1>")
+
+	for i, eval := range evaluations {
+		sb.WriteString("<div class='eval'>")
+		sb.WriteString(fmt.Sprintf("<h2>Job Evaluation #%d</h2>", i+1))
+
+		// Convert URLs to clickable links
+		htmlContent := convertTextToHTML(eval.Text)
+		sb.WriteString(htmlContent)
+		sb.WriteString("</div>")
+	}
+
+	sb.WriteString("</body></html>")
+	return os.WriteFile(filename, []byte(sb.String()), 0644)
+}
+func convertTextToHTML(text string) string {
+	// Escape HTML special chars
+	html := strings.ReplaceAll(text, "&", "&amp;")
+	html = strings.ReplaceAll(html, "<", "&lt;")
+	html = strings.ReplaceAll(html, ">", "&gt;")
+
+	// Replace URLs with <a href="...">
+	urlPattern := regexp.MustCompile(`(https?://[^\s<]+)`)
+	html = urlPattern.ReplaceAllString(html, `<a href="$1" target="_blank">$1</a>`)
+
+	// Convert newlines to <br>
+	html = strings.ReplaceAll(html, "\n", "<br>")
+
+	return html
+}
 
 func appendToFile(filename string, content string) error {
 	fmt.Printf("📝 Appending to file: %s\n", filename)
