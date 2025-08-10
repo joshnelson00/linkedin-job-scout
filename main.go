@@ -1,24 +1,24 @@
+// main.go
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"os"
-	"errors"
-	"io"
-	"net/http"
-	"net/url"
-	"sync"
-	"time"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
-
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"sync"
+	"time"
 )
 
 const (
-	maxConcurrentRequests = 1      // Controls concurrency
+	maxConcurrentRequests = 1               // Controls concurrency
 	rateLimitDelay        = 2 * time.Second // Delay between requests
 	maxRetries            = 5
 )
@@ -36,20 +36,20 @@ type JobListing struct {
 }
 
 type JobDescription struct {
-	JobPosition         string             `json:"job_position"`
-	JobLocation         string             `json:"job_location"`
-	CompanyName         string             `json:"company_name"`
-	CompanyLinkedInID   string             `json:"company_linkedin_id"`
-	JobPostingTime      string             `json:"job_posting_time"`
-	JobDescription      string             `json:"job_description"`
-	SeniorityLevel      string             `json:"Seniority_level"`
-	EmploymentType      string             `json:"Employment_type"`
-	JobFunction         string             `json:"Job_function"`
-	Industries          string             `json:"Industries"`
-	JobApplyLink        string             `json:"job_apply_link"`
-	RecruiterDetails    []Recruiter        `json:"recruiter_details"`
-	SimilarJobs         []SimilarJob       `json:"similar_jobs"`
-	PeopleAlsoViewed    []SimilarJob       `json:"people_also_viewed"`
+	JobPosition       string       `json:"job_position"`
+	JobLocation       string       `json:"job_location"`
+	CompanyName       string       `json:"company_name"`
+	CompanyLinkedInID string       `json:"company_linkedin_id"`
+	JobPostingTime    string       `json:"job_posting_time"`
+	JobDescription    string       `json:"job_description"`
+	SeniorityLevel    string       `json:"Seniority_level"`
+	EmploymentType    string       `json:"Employment_type"`
+	JobFunction       string       `json:"Job_function"`
+	Industries        string       `json:"Industries"`
+	JobApplyLink      string       `json:"job_apply_link"`
+	RecruiterDetails  []Recruiter  `json:"recruiter_details"`
+	SimilarJobs       []SimilarJob `json:"similar_jobs"`
+	PeopleAlsoViewed  []SimilarJob `json:"people_also_viewed"`
 }
 
 type Recruiter struct {
@@ -58,16 +58,15 @@ type Recruiter struct {
 }
 
 type SimilarJob struct {
-	JobPosition     string `json:"job_position"`
-	JobCompany      string `json:"job_company"`
-	JobLocation     string `json:"job_location"`
-	JobPostingTime  string `json:"job_posting_time"`
-	JobLink         string `json:"job_link"`
+	JobPosition    string `json:"job_position"`
+	JobCompany     string `json:"job_company"`
+	JobLocation    string `json:"job_location"`
+	JobPostingTime string `json:"job_posting_time"`
+	JobLink        string `json:"job_link"`
 }
 
 func main() {
 	log.Println("Starting main function...")
-
 
 	err := godotenv.Load()
 	if err != nil {
@@ -78,11 +77,11 @@ func main() {
 	ctx := context.Background()
 	redisAddr := os.Getenv("REDIS_ADDR")
 	redisDB := redis.NewClient(&redis.Options{
-        Addr:	  redisAddr,
-        Password: "", // No password set
-        DB:		  0,  // Use default DB
-        Protocol: 2,  // Connection protocol
-    })
+		Addr:     redisAddr,
+		Password: "", // No password set
+		DB:       0,  // Use default DB
+		Protocol: 2,  // Connection protocol
+	})
 
 	var jobListings []JobListing
 
@@ -104,9 +103,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	return
 }
-
 
 func getJobListings() ([]JobListing, error) {
 	log.Println("Fetching job listings from API...")
@@ -119,9 +116,9 @@ func getJobListings() ([]JobListing, error) {
 	geoID := os.Getenv("GEO_ID")
 
 	field := url.QueryEscape("Software Engineer Intern") // Position Searching For
-	location := url.QueryEscape("") // Location Name (doesn't affect query, but geoid does)
-	geoid := geoID // Location ID (Set in .env)
-	sortBy := "day" // Last 24 Hours
+	location := url.QueryEscape("")                      // Location Name (doesn't affect query, but geoid does)
+	geoid := geoID                                       // Location ID (Set in .env)
+	sortBy := "day"                                      // Last 24 Hours
 	jobType := ""
 	expLevel := ""
 	workType := ""
@@ -183,7 +180,6 @@ func getJobDescriptionWithRetry(ctx context.Context, redisDB *redis.Client, job 
 
 	return desc, fmt.Errorf("failed after %d retries: %v", maxRetries, err)
 }
-
 
 func getJobDescription(ctx context.Context, redisDB *redis.Client, job JobListing) (JobDescription, error) {
 	log.Printf("Fetching description for JobID: %s (%s)\n", job.JobID, job.JobPosition)
@@ -287,7 +283,6 @@ func storeInCache(ctx context.Context, redisDB *redis.Client, key string, desc J
 	return nil
 }
 
-
 type jobResult struct {
 	desc JobDescription
 	err  error
@@ -305,7 +300,7 @@ func processJobListings(ctx context.Context, redisDB *redis.Client, jobListings 
 		go func(job JobListing) {
 			defer wg.Done()
 
-			semaphore <- struct{}{} // acquire slot
+			semaphore <- struct{}{}    // acquire slot
 			time.Sleep(rateLimitDelay) // wait for rate limit delay
 
 			desc, err := getJobDescriptionWithRetry(ctx, redisDB, job)
@@ -323,7 +318,6 @@ func processJobListings(ctx context.Context, redisDB *redis.Client, jobListings 
 
 	return collectFormattedResults(resultChan)
 }
-
 
 func collectFormattedResults(resultChan <-chan jobResult) []string {
 	var results []string
