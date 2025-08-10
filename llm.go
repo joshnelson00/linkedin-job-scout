@@ -1,3 +1,4 @@
+// llm.go
 package main
 
 import (
@@ -107,6 +108,7 @@ func getJobEvaluations(jobDescs []string) error {
 			- Use the full range from 0 to 100.
 			- Deduct points for each missing qualification or mismatch.
 			- Provide actionable, specific suggestions, not generic tips.
+			- Return the result content in an HTML format (eg. <a> for links)
 
 			Format your response EXACTLY as follows:
 			---
