@@ -7,7 +7,7 @@ A Go-based tool that automatically fetches job listings and uses an LLM (via [Ol
 ## 🚀 Features
 
 - 🔍 **Fetches job listings** from an API (e.g., ScrapingDog)
-- 📄 **Loads and parses your resume** from `resume.txt`
+- 📄 **Loads and parses your resume** from `resume.html`
 - 🤖 **Uses a local LLM** (via Ollama) to evaluate job fit
 - ⚖️ **Scores and sorts jobs** based on AI evaluation
 - 📁 Outputs a ranked list to `LinkedinEvaluations.txt`
