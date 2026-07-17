@@ -1,19 +1,69 @@
-# LinkedIn Job Scout AI Evaluator
+# LinkedIn Job Scout
 
-A Go-based tool that automatically fetches job listings and uses an LLM (via [Ollama](https://ollama.com)) to evaluate which roles best match your resume. Ideal for job seekers and AI-enhanced career tools.
+An AI-powered job discovery and ranking platform built in Go that automates the process of finding, analyzing, and prioritizing software engineering opportunities.
 
----
+LinkedIn job searching is often a repetitive workflow: searching hundreds of listings, comparing requirements against your experience, and manually determining which positions are worth applying to.
 
-## 🚀 Features
+LinkedIn Job Scout automates this process by collecting job postings, caching results, analyzing compatibility with a candidate profile using local LLM inference, and generating ranked job recommendations.
 
-- 🔍 **Fetches job listings** from an API (e.g., ScrapingDog)
-- 📄 **Loads and parses your resume** from `resume.html`
-- 🤖 **Uses a local LLM** (via Ollama) to evaluate job fit
-- ⚖️ **Scores and sorts jobs** based on AI evaluation
-- 📁 Outputs a ranked list to `LinkedinEvaluations.txt`
-- 💾 **Caching** for job descriptions to avoid repeat work and save on API cost
-- 📊 Designed with concurrency and token efficiency in mind
+## Features
 
----
+- 🔎 Automated job discovery through third-party job APIs
+- ⚡ Concurrent job processing using Go goroutines
+- 🧠 LLM-powered resume/job compatibility analysis
+- 📊 Automated job fit scoring (0-100)
+- 💡 AI-generated improvement suggestions for resume alignment
+- 🚀 Redis-backed caching to reduce duplicate processing
+- 📧 Automated email delivery of ranked job recommendations
+- 🔄 End-to-end pipeline from job retrieval → analysis → notification
+
+### Concurrent Processing Pipeline
+
+Built a concurrent backend pipeline using Go goroutines and channels to process multiple job postings efficiently while controlling API usage.
+
+Key concepts:
+- Worker-style processing
+- Rate limiting
+- Asynchronous job evaluation
+- Fault isolation
+
+### Intelligent Job Matching
+
+Each job posting is analyzed against a candidate resume to determine:
+
+- Technical skill alignment
+- Experience relevance
+- Missing qualifications
+- Suggested resume improvements
+
+The system produces a compatibility score and actionable recommendations.
+
+### Redis Caching Layer
+
+Implemented Redis caching to:
+
+- Prevent duplicate job analysis
+- Reduce unnecessary API calls
+- Improve processing speed
+- Maintain state between executions
+
+## Example Workflow
+
+1. Retrieve new job postings from external APIs
+2. Normalize job descriptions
+3. Check Redis cache for existing analysis
+4. Send new postings to the LLM pipeline
+5. Generate compatibility scores and recommendations
+6. Rank opportunities
+7. Deliver results through email
 
 
+This project was built to explore practical applications of:
+
+- Distributed backend systems
+- Concurrent programming in Go
+- AI-assisted decision making
+- API integration
+- Infrastructure automation
+
+Rather than replacing the job search process, LinkedIn Job Scout acts as an intelligent filtering layer that helps candidates spend more time applying to high-value opportunities.
