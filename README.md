@@ -67,3 +67,58 @@ This project was built to explore practical applications of:
 - Infrastructure automation
 
 Rather than replacing the job search process, LinkedIn Job Scout acts as an intelligent filtering layer that helps candidates spend more time applying to high-value opportunities.
+
+## Running Locally
+
+### Prerequisites
+
+Install the following:
+
+- Go 1.22+
+- Redis
+- Ollama
+
+Verify installations:
+
+```bash
+go version
+redis-server --version
+ollama --version
+```
+
+### Set up .env
+```
+SCRAPINGDOG_API_KEY=<your_api_key>
+
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+OLLAMA_MODEL=llama3.2
+```
+## Running Locally
+
+### Start Dependencies
+
+Start Redis:
+
+```bash
+redis-server
+```
+
+Start Ollama and Download the Model:
+
+```bash
+ollama serve
+ollama pull llama3.2
+```
+
+Pull Go Libraries:
+
+```bash
+go mod downlaod
+```
+### Run Application
+
+```bash
+go run .
+```
